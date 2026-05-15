@@ -16,6 +16,7 @@ from app.models import Lead, User
 
 logger = logging.getLogger(__name__)
 _STATUS_MAP_CACHE: dict[int, dict[str, int]] = {}
+_CONTACT_FIELD_CACHE: dict[str, dict[str, Any]] | None = None
 
 
 def _is_configured(settings: Settings) -> bool:
@@ -123,7 +124,7 @@ async def _create_amocrm_lead(client: AmoCrmClient, settings: Settings, lead: Le
     lead.amo_sync_error = None if lead.amo_lead_id else "amoCRM response did not include lead id"
     lead.amo_synced_at = datetime.utcnow()
     if lead.amo_lead_id:
-        await _ensure_contact_phone(client, lead, lead.amo_contact_id)
+        await _ensure_contact_details(client, lead, lead.amo_contact_id)
         await _add_lead_note(client, int(lead.amo_lead_id), _lead_note(lead))
 
 
@@ -138,7 +139,7 @@ async def _update_amocrm_lead(client: AmoCrmClient, settings: Settings, lead: Le
     if status_id:
         payload["status_id"] = status_id
     await client.request("PATCH", f"/api/v4/leads/{lead.amo_lead_id}", json=payload)
-    await _ensure_contact_phone(client, lead, lead.amo_contact_id)
+    await _ensure_contact_details(client, lead, lead.amo_contact_id)
     await _add_lead_note(client, int(lead.amo_lead_id), _lead_note(lead))
     lead.amo_pipeline_id = settings.amocrm_pipeline_id
     lead.amo_status_id = status_id or _as_int(current.get("status_id"))
@@ -173,20 +174,60 @@ def _contact_payload(lead: Lead) -> dict[str, Any]:
     return contact
 
 
-async def _ensure_contact_phone(client: AmoCrmClient, lead: Lead, amo_contact_id: int | None) -> None:
-    phone = _lead_phone(lead)
-    if not phone or not amo_contact_id:
+async def _ensure_contact_details(client: AmoCrmClient, lead: Lead, amo_contact_id: int | None) -> None:
+    if not amo_contact_id:
         return
+    custom_fields = await _contact_custom_fields(client, lead)
     payload = {
         "name": _client_name(lead),
-        "custom_fields_values": [
-            {
-                "field_code": "PHONE",
-                "values": [{"value": phone, "enum_code": "WORK"}],
-            }
-        ],
+        "custom_fields_values": custom_fields,
     }
+    if not custom_fields:
+        payload.pop("custom_fields_values")
     await client.request("PATCH", f"/api/v4/contacts/{amo_contact_id}", json=payload)
+
+
+async def _contact_custom_fields(client: AmoCrmClient, lead: Lead) -> list[dict[str, Any]]:
+    fields: list[dict[str, Any]] = []
+    used_field_ids: set[int] = set()
+    phone = _lead_phone(lead)
+    if phone:
+        fields.append({"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]})
+
+    amo_fields = await _contact_fields(client)
+    for field_name, value in _contact_extra_values(lead).items():
+        if not value:
+            continue
+        field = _find_contact_field(amo_fields, field_name)
+        if field:
+            field_id = int(field["id"])
+            if field_id in used_field_ids:
+                continue
+            used_field_ids.add(field_id)
+            fields.append({"field_id": field["id"], "values": [{"value": value}]})
+    return fields
+
+
+async def _contact_fields(client: AmoCrmClient) -> dict[str, dict[str, Any]]:
+    global _CONTACT_FIELD_CACHE
+    if _CONTACT_FIELD_CACHE is not None:
+        return _CONTACT_FIELD_CACHE
+    data = await client.request("GET", "/api/v4/contacts/custom_fields")
+    fields = data.get("_embedded", {}).get("custom_fields", [])
+    result: dict[str, dict[str, Any]] = {}
+    for field in fields:
+        name = str(field.get("name") or "").strip().lower()
+        code = str(field.get("code") or "").strip().lower()
+        if name:
+            result[name] = field
+        if code:
+            result[code] = field
+    _CONTACT_FIELD_CACHE = result
+    return result
+
+
+def _find_contact_field(fields: dict[str, dict[str, Any]], name_or_code: str) -> dict[str, Any] | None:
+    return fields.get(name_or_code.strip().lower())
 
 
 def _lead_name(lead: Lead) -> str:
@@ -263,6 +304,47 @@ def _client_name(lead: Lead) -> str:
 
 def _lead_phone(lead: Lead) -> str:
     return lead.phone or (lead.user.phone if lead.user else "") or ""
+
+
+def _contact_extra_values(lead: Lead) -> dict[str, str]:
+    user = lead.user
+    values: dict[str, str] = {
+        "Имя": _client_name(lead),
+        "ФИО (полностью)": _client_name(lead),
+        "Source phone": _lead_phone(lead),
+    }
+    if not user:
+        return values
+
+    username = (user.username or "").lstrip("@")
+    platform_user_id = str(user.platform_user_id or "")
+    telegram_id = str(user.telegram_id or platform_user_id or "") if user.platform == "telegram" else ""
+    max_id = platform_user_id if user.platform == "max" else ""
+
+    if user.platform == "telegram":
+        values.update(
+            {
+                "TelegramUsername_WZ": username,
+                "Telegram username": username,
+                "TelegramId_WZ": telegram_id,
+                "Telegram ID": telegram_id,
+                "TGUSERNAME": username,
+                "TGID": telegram_id,
+            }
+        )
+        if username:
+            values["Telegram"] = f"https://t.me/{username}"
+    elif user.platform == "max":
+        values.update(
+            {
+                "MaxId_WZ": max_id,
+                "Max ID": max_id,
+                "MAXID": max_id,
+                "Max User ID": max_id,
+                "MAXUSERID": max_id,
+            }
+        )
+    return values
 
 
 def _recommender(lead: Lead) -> User | None:
