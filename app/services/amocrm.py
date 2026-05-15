@@ -123,6 +123,7 @@ async def _create_amocrm_lead(client: AmoCrmClient, settings: Settings, lead: Le
     lead.amo_sync_error = None if lead.amo_lead_id else "amoCRM response did not include lead id"
     lead.amo_synced_at = datetime.utcnow()
     if lead.amo_lead_id:
+        await _ensure_contact_phone(client, lead, lead.amo_contact_id)
         await _add_lead_note(client, int(lead.amo_lead_id), _lead_note(lead))
 
 
@@ -130,12 +131,14 @@ async def _update_amocrm_lead(client: AmoCrmClient, settings: Settings, lead: Le
     current = await client.get_lead(int(lead.amo_lead_id))
     if _as_int(current.get("pipeline_id")) != settings.amocrm_pipeline_id:
         raise RuntimeError("amoCRM lead is outside the configured pipeline; skipped")
+    lead.amo_contact_id = lead.amo_contact_id or _extract_contact_id(current)
 
     payload: dict[str, Any] = {"name": _lead_name(lead)}
     status_id = await _status_id_for_local_status(client, settings, lead.status)
     if status_id:
         payload["status_id"] = status_id
     await client.request("PATCH", f"/api/v4/leads/{lead.amo_lead_id}", json=payload)
+    await _ensure_contact_phone(client, lead, lead.amo_contact_id)
     await _add_lead_note(client, int(lead.amo_lead_id), _lead_note(lead))
     lead.amo_pipeline_id = settings.amocrm_pipeline_id
     lead.amo_status_id = status_id or _as_int(current.get("status_id"))
@@ -159,7 +162,7 @@ def _lead_payload(settings: Settings, lead: Lead, status_id: int | None) -> dict
 
 def _contact_payload(lead: Lead) -> dict[str, Any]:
     contact: dict[str, Any] = {"name": _client_name(lead)}
-    phone = lead.phone or (lead.user.phone if lead.user else None)
+    phone = _lead_phone(lead)
     if phone:
         contact["custom_fields_values"] = [
             {
@@ -168,6 +171,22 @@ def _contact_payload(lead: Lead) -> dict[str, Any]:
             }
         ]
     return contact
+
+
+async def _ensure_contact_phone(client: AmoCrmClient, lead: Lead, amo_contact_id: int | None) -> None:
+    phone = _lead_phone(lead)
+    if not phone or not amo_contact_id:
+        return
+    payload = {
+        "name": _client_name(lead),
+        "custom_fields_values": [
+            {
+                "field_code": "PHONE",
+                "values": [{"value": phone, "enum_code": "WORK"}],
+            }
+        ],
+    }
+    await client.request("PATCH", f"/api/v4/contacts/{amo_contact_id}", json=payload)
 
 
 def _lead_name(lead: Lead) -> str:
@@ -240,6 +259,10 @@ def _client_name(lead: Lead) -> str:
         return f"Lead {lead.id}"
     name = " ".join(part for part in [user.first_name, user.last_name] if part)
     return name or user.username or str(user.platform_user_id or user.telegram_id or lead.id)
+
+
+def _lead_phone(lead: Lead) -> str:
+    return lead.phone or (lead.user.phone if lead.user else "") or ""
 
 
 def _recommender(lead: Lead) -> User | None:
