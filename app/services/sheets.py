@@ -247,6 +247,7 @@ async def clear_sheet_rows() -> None:
         await _clear_sheet_formatting(client, settings)
         await _request(client, "POST", _range_url(settings, "A:Z", ":clear"), json={})
         await _ensure_headers(client, settings)
+        await _format_header_row(client, settings)
 
 
 async def _clear_sheet_formatting(client: aiohttp.ClientSession, settings: Settings) -> None:
@@ -290,6 +291,68 @@ async def _clear_sheet_formatting(client: aiohttp.ClientSession, settings: Setti
         "POST",
         batch_url,
         json={"requests": requests},
+    )
+
+
+async def _format_header_row(client: aiohttp.ClientSession, settings: Settings) -> None:
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}"
+        "?fields=sheets.properties(sheetId,title)"
+    )
+    data = await _request(client, "GET", url)
+    sheet_id = None
+    for item in data.get("sheets", []):
+        properties = item.get("properties", {})
+        if properties.get("title") == settings.google_sheets_worksheet:
+            sheet_id = properties.get("sheetId")
+            break
+    if sheet_id is None:
+        return
+
+    batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}:batchUpdate"
+    await _request(
+        client,
+        "POST",
+        batch_url,
+        json={
+            "requests": [
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 0,
+                            "endRowIndex": 1,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": len(HEADERS),
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColor": {
+                                    "red": 0.08,
+                                    "green": 0.16,
+                                    "blue": 0.28,
+                                },
+                                "horizontalAlignment": "CENTER",
+                                "verticalAlignment": "MIDDLE",
+                                "wrapStrategy": "WRAP",
+                                "textFormat": {
+                                    "foregroundColor": {
+                                        "red": 1,
+                                        "green": 1,
+                                        "blue": 1,
+                                    },
+                                    "bold": True,
+                                },
+                            }
+                        },
+                        "fields": (
+                            "userEnteredFormat(backgroundColor,"
+                            "horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)"
+                        ),
+                    }
+                }
+            ]
+        },
     )
 
 
