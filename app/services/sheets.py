@@ -250,33 +250,46 @@ async def clear_sheet_rows() -> None:
 
 
 async def _clear_sheet_formatting(client: aiohttp.ClientSession, settings: Settings) -> None:
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}?fields=sheets.properties(sheetId,title)"
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}"
+        "?fields=sheets(properties(sheetId,title),bandedRanges(bandedRangeId))"
+    )
     data = await _request(client, "GET", url)
     sheet_id = None
+    banded_range_ids = []
     for item in data.get("sheets", []):
         properties = item.get("properties", {})
         if properties.get("title") == settings.google_sheets_worksheet:
             sheet_id = properties.get("sheetId")
+            banded_range_ids = [
+                banded_range["bandedRangeId"]
+                for banded_range in item.get("bandedRanges", [])
+                if "bandedRangeId" in banded_range
+            ]
             break
     if sheet_id is None:
         return
+
+    requests = [
+        {"deleteBanding": {"bandedRangeId": banded_range_id}}
+        for banded_range_id in banded_range_ids
+    ]
+    requests.append(
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id},
+                "cell": {},
+                "fields": "userEnteredFormat",
+            }
+        }
+    )
 
     batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}:batchUpdate"
     await _request(
         client,
         "POST",
         batch_url,
-        json={
-            "requests": [
-                {
-                    "repeatCell": {
-                        "range": {"sheetId": sheet_id},
-                        "cell": {},
-                        "fields": "userEnteredFormat",
-                    }
-                }
-            ]
-        },
+        json={"requests": requests},
     )
 
 
