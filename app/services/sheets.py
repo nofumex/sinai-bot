@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from functools import lru_cache
 from urllib.parse import quote
 
@@ -194,9 +195,15 @@ async def sync_lead_to_sheets(session: AsyncSession, lead: Lead) -> None:
             if row_number:
                 url = _range_url(settings, f"A{row_number}:S{row_number}", "?valueInputOption=RAW")
                 await _request(client, "PUT", url, json={"values": values})
+                await _clear_data_row_formatting(client, settings, row_number)
             else:
                 url = _range_url(settings, SHEET_COLUMNS, ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS")
-                await _request(client, "POST", url, json={"values": values})
+                data = await _request(client, "POST", url, json={"values": values})
+                row_number = _row_number_from_range(data.get("updates", {}).get("updatedRange", ""))
+                if not row_number:
+                    row_number = await _find_row_number(client, settings, lead.id)
+                if row_number:
+                    await _clear_data_row_formatting(client, settings, row_number)
     except Exception:
         logger.exception("Failed to sync lead %s to Google Sheets", lead.id)
 
@@ -232,6 +239,11 @@ async def _find_row_number(client: aiohttp.ClientSession, settings: Settings, le
         if row and row[0] == str(lead_id):
             return index
     return None
+
+
+def _row_number_from_range(range_name: str) -> int | None:
+    match = re.search(r"![A-Z]+(\d+):", range_name)
+    return int(match.group(1)) if match else None
 
 
 async def clear_sheet_rows() -> None:
@@ -294,18 +306,40 @@ async def _clear_sheet_formatting(client: aiohttp.ClientSession, settings: Setti
     )
 
 
-async def _format_header_row(client: aiohttp.ClientSession, settings: Settings) -> None:
-    url = (
-        f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}"
-        "?fields=sheets.properties(sheetId,title)"
+async def _clear_data_row_formatting(client: aiohttp.ClientSession, settings: Settings, row_number: int) -> None:
+    if row_number <= 1:
+        return
+    sheet_id = await _sheet_id(client, settings)
+    if sheet_id is None:
+        return
+
+    batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}:batchUpdate"
+    await _request(
+        client,
+        "POST",
+        batch_url,
+        json={
+            "requests": [
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": row_number - 1,
+                            "endRowIndex": row_number,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": len(HEADERS),
+                        },
+                        "cell": {},
+                        "fields": "userEnteredFormat",
+                    }
+                }
+            ]
+        },
     )
-    data = await _request(client, "GET", url)
-    sheet_id = None
-    for item in data.get("sheets", []):
-        properties = item.get("properties", {})
-        if properties.get("title") == settings.google_sheets_worksheet:
-            sheet_id = properties.get("sheetId")
-            break
+
+
+async def _format_header_row(client: aiohttp.ClientSession, settings: Settings) -> None:
+    sheet_id = await _sheet_id(client, settings)
     if sheet_id is None:
         return
 
@@ -354,6 +388,19 @@ async def _format_header_row(client: aiohttp.ClientSession, settings: Settings) 
             ]
         },
     )
+
+
+async def _sheet_id(client: aiohttp.ClientSession, settings: Settings) -> int | None:
+    url = (
+        f"https://sheets.googleapis.com/v4/spreadsheets/{settings.google_sheets_id}"
+        "?fields=sheets.properties(sheetId,title)"
+    )
+    data = await _request(client, "GET", url)
+    for item in data.get("sheets", []):
+        properties = item.get("properties", {})
+        if properties.get("title") == settings.google_sheets_worksheet:
+            return properties.get("sheetId")
+    return None
 
 
 async def _request(client: aiohttp.ClientSession, method: str, url: str, **kwargs) -> dict:
