@@ -65,12 +65,11 @@ def agent_phone_menu() -> MaxKeyboard:
 
 def agent_menu() -> MaxKeyboard:
     return [
-        [_btn("Профиль", "profile:show")],
-        [_btn("Правила программы", "agent:rules")],
-        [_btn("Реферальная ссылка", "agent:ref_url")],
-        [_btn("Заработанные бонусы", "agent:bonuses")],
-        [_btn("Связь с менеджером", "chat:start_agent")],
         [_btn("+ Новый клиент", "agent:new_client")],
+        [_btn("Реферальная ссылка", "agent:ref_url")],
+        [_btn("Правила программы", "agent:rules"), _btn("Ознакомиться с офертой", url=OFFER_SITE_URL)],
+        [_btn("Заработанные бонусы", "agent:bonuses"), _btn("Профиль", "profile:show")],
+        [_btn("Связь с менеджером", "chat:start_agent")],
         [_btn("Главное меню", "user:main")],
     ]
 
@@ -87,10 +86,10 @@ def profile_menu() -> MaxKeyboard:
 
 def rules_menu() -> MaxKeyboard:
     return [
-        [_btn("Реферальная ссылка", "agent:ref_url")],
-        [_btn("Заработанные бонусы", "agent:bonuses")],
-        [_btn("Связь с менеджером", "chat:start_agent")],
         [_btn("+ Новый клиент", "agent:new_client")],
+        [_btn("Реферальная ссылка", "agent:ref_url")],
+        [_btn("Ознакомиться с офертой", url=OFFER_SITE_URL)],
+        [_btn("Заработанные бонусы", "agent:bonuses"), _btn("Связь с менеджером", "chat:start_agent")],
         [_btn("Главное меню", "user:main")],
     ]
 

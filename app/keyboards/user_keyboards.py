@@ -95,12 +95,17 @@ def chat_end_menu() -> InlineKeyboardMarkup:
 def agent_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [_button("Профиль", "profile:show", style="primary")],
-            [_button("Правила программы", "agent:rules")],
-            [_button("Реферальная ссылка", "agent:ref_url")],
-            [_button("Заработанные бонусы", "agent:bonuses")],
-            [_button("Связь с менеджером", "chat:start_agent")],
             [_button("+ Новый клиент", "agent:new_client", style="success")],
+            [_button("Реферальная ссылка", "agent:ref_url", style="primary")],
+            [
+                _button("Правила программы", "agent:rules"),
+                _button("Ознакомиться с офертой", url=OFFER_SITE_URL),
+            ],
+            [
+                _button("Заработанные бонусы", "agent:bonuses"),
+                _button("Профиль", "profile:show"),
+            ],
+            [_button("Связь с менеджером", "chat:start_agent")],
             [_button("Главное меню", "user:main")],
         ]
     )
@@ -109,10 +114,13 @@ def agent_menu() -> InlineKeyboardMarkup:
 def agent_rules_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [_button("Реферальная ссылка", "agent:ref_url")],
-            [_button("Заработанные бонусы", "agent:bonuses")],
-            [_button("Связь с менеджером", "chat:start_agent")],
             [_button("+ Новый клиент", "agent:new_client", style="success")],
+            [_button("Реферальная ссылка", "agent:ref_url", style="primary")],
+            [_button("Ознакомиться с офертой", url=OFFER_SITE_URL)],
+            [
+                _button("Заработанные бонусы", "agent:bonuses"),
+                _button("Связь с менеджером", "chat:start_agent"),
+            ],
             [_button("Главное меню", "user:main")],
         ]
     )
