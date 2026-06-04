@@ -3,6 +3,7 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 REVIEWS_SITE_URL = "https://sinai24.ru/"
+OFFER_SITE_URL = "http://sinai24.ru/oferta-referal"
 
 
 def _button(text: str, callback_data: str | None = None, url: str | None = None, style: str | None = None) -> InlineKeyboardButton:
@@ -34,6 +35,7 @@ def client_menu() -> InlineKeyboardMarkup:
                 _button("О компании", "user:about"),
                 _button("Отзывы и практика", url=REVIEWS_SITE_URL),
             ],
+            [_button("Ознакомиться с офертой", url=OFFER_SITE_URL)],
             [
                 _button("Профиль", "profile:show"),
                 _button("Связь с менеджером", "chat:start_user"),
@@ -68,6 +70,7 @@ def reviews_menu(reviews_url: str | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if reviews_url:
         rows.append([_button("Смотреть отзывы", url=reviews_url, style="primary")])
+    rows.append([_button("Ознакомиться с офертой", url=OFFER_SITE_URL)])
     rows.append([_button("Записаться на консультацию", "user:consultation", style="success")])
     rows.append([_button("Главное меню", "user:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

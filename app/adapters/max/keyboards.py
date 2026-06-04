@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 REVIEWS_SITE_URL = "https://sinai24.ru/"
+OFFER_SITE_URL = "http://sinai24.ru/oferta-referal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,7 @@ def client_menu() -> MaxKeyboard:
         [_btn("Записаться на консультацию", "user:consultation")],
         [_btn("Задать вопрос специалисту", "user:question")],
         [_btn("О компании", "user:about"), _btn("Отзывы и практика", url=REVIEWS_SITE_URL)],
+        [_btn("Ознакомиться с офертой", url=OFFER_SITE_URL)],
         [_btn("Профиль", "profile:show"), _btn("Связь с менеджером", "chat:start_user")],
         [_btn("Главное меню", "user:main")],
     ]
