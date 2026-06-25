@@ -235,7 +235,9 @@ def _lead_name(lead: Lead) -> str:
     recommender = _recommender(lead)
     recommender_name = _user_name(recommender)
     if lead.type == "agent_client" and recommender_name:
-        return f"Клиент от агента {recommender_name} - #{lead.id} - {_client_name(lead)}"
+        username = f"@{recommender.username}" if recommender.username else str(recommender.platform_user_id or recommender.telegram_id or "")
+        phone_part = f", {recommender.phone}" if recommender.phone else ""
+        return f"Клиент от агента {username}{phone_part} - #{lead.id}"
 
     type_label = {
         "consultation": "консультация",
