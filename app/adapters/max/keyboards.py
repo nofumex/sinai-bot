@@ -94,6 +94,10 @@ def rules_menu() -> MaxKeyboard:
     ]
 
 
+def yes_no_menu(yes_callback: str, no_callback: str) -> MaxKeyboard:
+    return [[_btn("Да", yes_callback), _btn("Нет", no_callback)]]
+
+
 def lead_actions(
     lead_id: int,
     include_bonus: bool = True,

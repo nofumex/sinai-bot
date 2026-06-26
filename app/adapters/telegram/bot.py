@@ -15,6 +15,7 @@ from app.database import SessionLocal
 from app.handlers import admin, agent, chat, commands, developer, manager, profile, user
 from app.middlewares.role_middleware import DbUserMiddleware
 from app.keyboards.manager_keyboards import lead_actions
+from app.services.agent_callback_notifications import notify_telegram_callback_phone_results
 from app.services.delayed_notifications import due_agent_client_leads, mark_staff_notified
 from app.services.notifications import notify_staff
 from app.utils.text import new_lead_notification
@@ -80,6 +81,18 @@ async def send_due_agent_client_notifications(bot: Bot, settings: Settings) -> N
         await asyncio.sleep(15)
 
 
+async def send_callback_phone_results(bot: Bot) -> None:
+    while True:
+        try:
+            async with SessionLocal() as session:
+                await notify_telegram_callback_phone_results(bot, session)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Failed to send Telegram callback phone results")
+        await asyncio.sleep(30)
+
+
 async def run_telegram_bot(settings: Settings) -> None:
     bot = Bot(settings.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(settings=settings)
@@ -100,6 +113,7 @@ async def run_telegram_bot(settings: Settings) -> None:
 
     try:
         delayed_task = asyncio.create_task(send_due_agent_client_notifications(bot, settings))
+        callback_phone_task = asyncio.create_task(send_callback_phone_results(bot))
         if settings.drop_pending_updates:
             await bot.delete_webhook(drop_pending_updates=True)
         await set_commands(bot)
@@ -107,4 +121,5 @@ async def run_telegram_bot(settings: Settings) -> None:
         await dp.start_polling(bot)
     finally:
         delayed_task.cancel()
+        callback_phone_task.cancel()
         await bot.session.close()

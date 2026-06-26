@@ -65,6 +65,10 @@ class Lead(Base):
     amo_sync_status: Mapped[str | None] = mapped_column(String(32))
     amo_sync_error: Mapped[str | None] = mapped_column(Text)
     amo_synced_at: Mapped[datetime | None] = mapped_column(DateTime)
+    amo_callback_task_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    amo_callback_task_created_at: Mapped[datetime | None] = mapped_column(DateTime)
+    amo_callback_task_result: Mapped[str | None] = mapped_column(Text)
+    amo_callback_task_notified_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

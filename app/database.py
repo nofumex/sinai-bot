@@ -55,6 +55,14 @@ async def _migrate_sqlite(conn) -> None:
         await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_sync_error TEXT"))
     if "amo_synced_at" not in lead_columns:
         await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_synced_at DATETIME"))
+    if "amo_callback_task_id" not in lead_columns:
+        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_id BIGINT"))
+    if "amo_callback_task_created_at" not in lead_columns:
+        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_created_at DATETIME"))
+    if "amo_callback_task_result" not in lead_columns:
+        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_result TEXT"))
+    if "amo_callback_task_notified_at" not in lead_columns:
+        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_notified_at DATETIME"))
 
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_platform ON users(platform)"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_platform_user_id ON users(platform_user_id)"))
@@ -63,6 +71,7 @@ async def _migrate_sqlite(conn) -> None:
     await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_leads_amo_lead_id ON leads(amo_lead_id)"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_amo_pipeline_id ON leads(amo_pipeline_id)"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_amo_status_id ON leads(amo_status_id)"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_amo_callback_task_id ON leads(amo_callback_task_id)"))
 
     await conn.execute(
         text(

@@ -12,8 +12,16 @@ from app.adapters.max.states import clear_state, get_state, set_state
 from app.config import Settings
 from app.database import SessionLocal
 from app.enums import BonusStatus, LeadStatus
+from app.services.amocrm import ensure_callback_phone_task
 from app.models import Bonus, ChatSession, Lead, User
 from app.services.bonuses import bonus_totals, create_bonus, recent_bonuses, set_bonus_status
+from app.utils.agent_client_followup import (
+    AGENT_CLIENT_DONE_TEXT,
+    CALL_PHONE_SHARE_PROMPT,
+    CALL_PHONE_TASK_CREATED_TEXT,
+    CALL_PHONE_TASK_FAILED_TEXT,
+    CLIENT_WARNING_PROMPT,
+)
 from app.services.chat_sessions import (
     close_session,
     connect_manager,
@@ -74,6 +82,11 @@ from app.utils.validators import clean_text, normalize_phone, parse_positive_int
 
 logger = logging.getLogger(__name__)
 
+WARN_CLIENT_YES = "agent:warn_client:yes"
+WARN_CLIENT_NO = "agent:warn_client:no"
+SHARE_CALL_PHONE_YES = "agent:share_call_phone:yes"
+SHARE_CALL_PHONE_NO = "agent:share_call_phone:no"
+
 TEXT_TO_CALLBACK = {
     "Списать долги законно": "user:debts",
     "Хочу стать агентом": "agent:join",
@@ -106,6 +119,15 @@ TEXT_TO_CALLBACK = {
 
 async def send(client: MaxBotClient, event: IncomingEvent, text: str, keyboard=None) -> None:
     await client.send_message(chat_id=event.chat_id, text=text, keyboard=keyboard)
+
+
+def _yes_no_choice(event: IncomingEvent, yes_callback: str, no_callback: str) -> bool | None:
+    value = (event.callback_data or event.text or "").strip().lower()
+    if value in {yes_callback, "да"}:
+        return True
+    if value in {no_callback, "нет"}:
+        return False
+    return None
 
 
 def _form_stat_line(label: str, item: dict[str, int | float]) -> str:
@@ -465,8 +487,32 @@ async def _handle_new_client_state(client: MaxBotClient, event: IncomingEvent, s
         lead = await get_lead(session, data["lead_id"])
         if lead:
             await update_agent_client_lead(session, lead, agent_payout_phone=payout_phone)
+        await set_state(session, event.platform_user_id, "new_client_warn", data)
+        await send(client, event, CLIENT_WARNING_PROMPT, keyboards.yes_no_menu(WARN_CLIENT_YES, WARN_CLIENT_NO))
+    elif state == "new_client_warn":
+        choice = _yes_no_choice(event, WARN_CLIENT_YES, WARN_CLIENT_NO)
+        if choice is None:
+            await send(client, event, CLIENT_WARNING_PROMPT, keyboards.yes_no_menu(WARN_CLIENT_YES, WARN_CLIENT_NO))
+            return True
+        if not choice:
+            await clear_state(session, event.platform_user_id)
+            await send(client, event, AGENT_CLIENT_DONE_TEXT, keyboards.agent_menu())
+            return True
+        await set_state(session, event.platform_user_id, "new_client_share_call_phone", data)
+        await send(client, event, CALL_PHONE_SHARE_PROMPT, keyboards.yes_no_menu(SHARE_CALL_PHONE_YES, SHARE_CALL_PHONE_NO))
+    elif state == "new_client_share_call_phone":
+        choice = _yes_no_choice(event, SHARE_CALL_PHONE_YES, SHARE_CALL_PHONE_NO)
+        if choice is None:
+            await send(client, event, CALL_PHONE_SHARE_PROMPT, keyboards.yes_no_menu(SHARE_CALL_PHONE_YES, SHARE_CALL_PHONE_NO))
+            return True
+        if not choice:
+            await clear_state(session, event.platform_user_id)
+            await send(client, event, AGENT_CLIENT_DONE_TEXT, keyboards.agent_menu())
+            return True
+        lead = await get_lead(session, data["lead_id"]) if data.get("lead_id") else None
+        created = await ensure_callback_phone_task(session, lead) if lead else False
         await clear_state(session, event.platform_user_id)
-        await send(client, event, "<b>Спасибо.</b> Данные клиента переданы менеджерам «Синай».", keyboards.agent_menu())
+        await send(client, event, CALL_PHONE_TASK_CREATED_TEXT if created else CALL_PHONE_TASK_FAILED_TEXT, keyboards.agent_menu())
     return True
 
 

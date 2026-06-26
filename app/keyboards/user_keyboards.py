@@ -124,3 +124,14 @@ def agent_rules_menu() -> InlineKeyboardMarkup:
             [_button("Главное меню", "user:main")],
         ]
     )
+
+def yes_no_menu(yes_callback: str, no_callback: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                _button("Да", yes_callback, style="success"),
+                _button("Нет", no_callback, style="danger"),
+            ]
+        ]
+    )
+
