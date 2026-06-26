@@ -9,7 +9,6 @@ from app.adapters.max.handlers import handle_update, notify_staff
 from app.adapters.max.mapper import parse_update
 from app.config import Settings
 from app.database import SessionLocal
-from app.services.agent_callback_notifications import notify_max_callback_phone_results
 from app.services.delayed_notifications import due_agent_client_leads, mark_staff_notified
 from app.utils.text import new_lead_notification
 
@@ -40,23 +39,10 @@ async def send_due_agent_client_notifications(client: MaxBotClient, settings: Se
         await asyncio.sleep(15)
 
 
-async def send_callback_phone_results(client: MaxBotClient) -> None:
-    while True:
-        try:
-            async with SessionLocal() as session:
-                await notify_max_callback_phone_results(client, session)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Failed to send MAX callback phone results")
-        await asyncio.sleep(30)
-
-
 async def run_max_bot(settings: Settings) -> None:
     marker: int | None = None
     async with MaxBotClient(settings.max_bot_token, settings.max_api_base_url) as client:
         delayed_task = asyncio.create_task(send_due_agent_client_notifications(client, settings))
-        callback_phone_task = asyncio.create_task(send_callback_phone_results(client))
         logger.info("MAX polling started")
         try:
             while True:
@@ -78,4 +64,3 @@ async def run_max_bot(settings: Settings) -> None:
                     await asyncio.sleep(3)
         finally:
             delayed_task.cancel()
-            callback_phone_task.cancel()

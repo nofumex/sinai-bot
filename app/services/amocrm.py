@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -14,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.config import Settings, get_settings
 from app.enums import LeadStatus
 from app.models import Lead, User
-from app.utils.validators import normalize_phone
+from app.services.sales_managers import assign_sales_manager_if_needed
 
 logger = logging.getLogger(__name__)
 _STATUS_MAP_CACHE: dict[int, dict[str, int]] = {}
@@ -45,6 +44,7 @@ async def sync_lead_to_amocrm_by_id(lead_id: int) -> None:
             .options(
                 selectinload(Lead.user).selectinload(User.referrer),
                 selectinload(Lead.agent),
+                selectinload(Lead.sales_manager),
             )
         )
         lead = result.scalar_one_or_none()
@@ -58,9 +58,10 @@ async def sync_lead_to_amocrm(session: AsyncSession, lead: Lead) -> None:
         return
 
     try:
-        await session.refresh(lead, ["user", "agent"])
+        await session.refresh(lead, ["user", "agent", "sales_manager"])
         if lead.user:
             await session.refresh(lead.user, ["referrer"])
+        await assign_sales_manager_if_needed(session, lead)
         async with AmoCrmClient(settings) as client:
             if lead.amo_lead_id:
                 await _update_amocrm_lead(client, settings, lead)
@@ -75,123 +76,60 @@ async def sync_lead_to_amocrm(session: AsyncSession, lead: Lead) -> None:
         logger.exception("Failed to sync lead %s to amoCRM", lead.id)
 
 
-async def ensure_callback_phone_task(session: AsyncSession, lead: Lead) -> bool:
+async def ensure_sales_manager_assignment(session: AsyncSession, lead: Lead):
+    manager = await assign_sales_manager_if_needed(session, lead)
+    await session.commit()
+    if lead.amo_lead_id:
+        await sync_lead_to_amocrm(session, lead)
+    return manager
+
+
+async def add_agent_followup_answer_note(session: AsyncSession, lead: Lead, label: str, answer: str) -> bool:
     settings = get_settings()
     if not _is_configured(settings):
         return False
-    if lead.amo_callback_task_id:
-        return True
-
-    await session.refresh(lead, ["user", "agent"])
-    if lead.user:
-        await session.refresh(lead.user, ["referrer"])
-    if not lead.amo_lead_id:
-        await sync_lead_to_amocrm(session, lead)
-        await session.refresh(lead, ["user", "agent"])
-    if not lead.amo_lead_id:
-        return False
 
     try:
+        await session.refresh(lead, ["user", "agent", "sales_manager"])
+        if lead.user:
+            await session.refresh(lead.user, ["referrer"])
+        if not lead.amo_lead_id:
+            await sync_lead_to_amocrm(session, lead)
+            await session.refresh(lead, ["user", "agent", "sales_manager"])
+        if not lead.amo_lead_id:
+            return False
+
+        text = _followup_answer_note(lead, label, answer)
         async with AmoCrmClient(settings) as client:
             current = await client.get_lead(int(lead.amo_lead_id))
             if _as_int(current.get("pipeline_id")) != settings.amocrm_pipeline_id:
-                raise RuntimeError("amoCRM lead is outside the configured pipeline; skipped callback task")
-            task = await client.create_task(_callback_phone_task_payload(lead))
-        task_id = _as_int(task.get("id"))
-        if not task_id:
-            raise RuntimeError("amoCRM response did not include task id")
-        lead.amo_callback_task_id = task_id
-        lead.amo_callback_task_created_at = datetime.utcnow()
-        lead.amo_callback_task_result = None
-        lead.amo_callback_task_notified_at = None
-        await session.commit()
+                raise RuntimeError("amoCRM lead is outside the configured pipeline; skipped followup note")
+            await _add_lead_note(client, int(lead.amo_lead_id), text)
         return True
-    except Exception as exc:
-        lead.amo_sync_status = "error"
-        lead.amo_sync_error = str(exc)[:1000]
-        lead.amo_synced_at = datetime.utcnow()
-        await session.commit()
-        logger.exception("Failed to create callback phone task for lead %s", lead.id)
+    except Exception:
+        logger.exception("Failed to add followup answer note for lead %s", lead.id)
         return False
 
 
-async def callback_phone_result_for_lead(session: AsyncSession, lead: Lead) -> str | None:
-    settings = get_settings()
-    if not _is_configured(settings) or not lead.amo_callback_task_id or lead.amo_callback_task_notified_at:
-        return None
-
-    try:
-        async with AmoCrmClient(settings) as client:
-            task = await client.get_task(int(lead.amo_callback_task_id))
-    except Exception:
-        logger.exception("Failed to fetch callback phone task %s for lead %s", lead.amo_callback_task_id, lead.id)
-        return None
-
-    if not task.get("is_completed"):
-        return None
-
-    result_text = _task_result_text(task)
-    if result_text is not None:
-        lead.amo_callback_task_result = result_text[:1000]
-        await session.commit()
-    phone = _extract_phone_from_task_result(result_text or "")
-    return phone
-
-
-async def mark_callback_phone_notified(session: AsyncSession, lead: Lead) -> None:
-    lead.amo_callback_task_notified_at = datetime.utcnow()
-    await session.commit()
-
-
-def _callback_phone_task_payload(lead: Lead) -> dict[str, Any]:
-    complete_till = int((datetime.utcnow() + timedelta(hours=4)).timestamp())
-    return {
-        "text": _callback_phone_task_text(lead),
-        "complete_till": complete_till,
-        "entity_id": int(lead.amo_lead_id),
-        "entity_type": "leads",
-        "request_id": f"callback_phone_{lead.id}",
-    }
-
-
-def _callback_phone_task_text(lead: Lead) -> str:
-    recommender = _recommender(lead)
+def _followup_answer_note(lead: Lead, label: str, answer: str) -> str:
+    manager = lead.sales_manager
     lines = [
-        "Агент попросил номер, с которого будут звонить клиенту.",
-        "Укажите номер в результате задачи: Добавить результат.",
-        "После этого бот отправит номер агенту автоматически.",
-        "",
+        "Ответ агента по предупреждению клиента",
         f"ID заявки в боте: {lead.id}",
         f"Клиент: {_client_name(lead)}",
-        f"Телефон клиента: {_lead_phone(lead)}",
+        f"{label}: {answer}",
     ]
-    if recommender:
+    if manager:
         lines.extend(
             [
                 "",
-                "Агент",
-                f"Имя: {_user_name(recommender)}",
-                f"Username: {_username(recommender)}",
-                f"Телефон агента: {recommender.phone or lead.agent_payout_phone or ''}",
+                "Назначенный менеджер продаж",
+                f"Имя: {manager.name}",
+                f"Телефон: {manager.phone}",
+                f"amoCRM user ID: {manager.amo_user_id or ''}",
             ]
         )
-    return "\n".join(lines)[:1000]
-
-
-def _task_result_text(task: dict[str, Any]) -> str | None:
-    result = task.get("result")
-    if isinstance(result, dict):
-        value = result.get("text")
-        return str(value).strip() if value else ""
-    return None
-
-
-def _extract_phone_from_task_result(text: str) -> str | None:
-    for match in re.finditer(r"\+?\d[\d\s().-]{8,}\d", text):
-        phone = normalize_phone(match.group(0))
-        if phone:
-            return phone
-    return normalize_phone(text)
+    return "\n".join(lines)
 
 
 class AmoCrmClient:
@@ -231,14 +169,6 @@ class AmoCrmClient:
     async def get_lead(self, amo_lead_id: int) -> dict[str, Any]:
         return await self.request("GET", f"/api/v4/leads/{amo_lead_id}?with=contacts")
 
-    async def create_task(self, payload: dict[str, Any]) -> dict[str, Any]:
-        data = await self.request("POST", "/api/v4/tasks", json=[payload])
-        tasks = data.get("_embedded", {}).get("tasks", []) if isinstance(data, dict) else []
-        return tasks[0] if tasks else {}
-
-    async def get_task(self, task_id: int) -> dict[str, Any]:
-        return await self.request("GET", f"/api/v4/tasks/{task_id}")
-
 
 async def _create_amocrm_lead(client: AmoCrmClient, settings: Settings, lead: Lead) -> None:
     status_id = await _status_id_for_local_status(client, settings, lead.status)
@@ -264,6 +194,9 @@ async def _update_amocrm_lead(client: AmoCrmClient, settings: Settings, lead: Le
     lead.amo_contact_id = lead.amo_contact_id or _extract_contact_id(current)
 
     payload: dict[str, Any] = {"name": _lead_name(lead)}
+    responsible_user_id = _responsible_user_id(lead)
+    if responsible_user_id:
+        payload["responsible_user_id"] = responsible_user_id
     status_id = await _status_id_for_local_status(client, settings, lead.status)
     if status_id:
         payload["status_id"] = status_id
@@ -287,6 +220,9 @@ def _lead_payload(settings: Settings, lead: Lead, status_id: int | None) -> dict
     }
     if status_id:
         payload["status_id"] = status_id
+    responsible_user_id = _responsible_user_id(lead)
+    if responsible_user_id:
+        payload["responsible_user_id"] = responsible_user_id
     return payload
 
 
@@ -413,7 +349,23 @@ def _lead_note(lead: Lead) -> str:
         lines.append(f"Кем приходится рекомендателю: {lead.relation_to_agent}")
     if lead.agent_payout_phone:
         lines.append(f"Телефон агента для выплаты: {lead.agent_payout_phone}")
+    if lead.sales_manager:
+        lines.extend(
+            [
+                "",
+                "Менеджер продаж",
+                f"Имя: {lead.sales_manager.name}",
+                f"Телефон: {lead.sales_manager.phone}",
+                f"amoCRM user ID: {lead.sales_manager.amo_user_id or ''}",
+            ]
+        )
     return "\n".join(line for line in lines if line is not None)
+
+
+def _responsible_user_id(lead: Lead) -> int | None:
+    if lead.sales_manager and lead.sales_manager.enabled and lead.sales_manager.amo_user_id:
+        return int(lead.sales_manager.amo_user_id)
+    return None
 
 
 async def _add_lead_note(client: AmoCrmClient, amo_lead_id: int, text: str) -> None:

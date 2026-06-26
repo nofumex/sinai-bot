@@ -11,7 +11,7 @@ from app.keyboards.user_keyboards import agent_menu, agent_rules_menu, main_menu
 from app.models import User
 from app.services.bonuses import bonus_totals, recent_bonuses
 from app.services.developer import is_participant_user, test_mode_enabled
-from app.services.amocrm import ensure_callback_phone_task
+from app.services.amocrm import add_agent_followup_answer_note, ensure_sales_manager_assignment
 from app.services.leads import create_agent_client_lead_draft, get_lead, update_agent_client_lead
 from app.services.referrals import recent_referrals
 from app.services.users import set_agent
@@ -19,9 +19,9 @@ from app.states.manager_states import AgentClientStates
 from app.utils.agent_client_followup import (
     AGENT_CLIENT_DONE_TEXT,
     CALL_PHONE_SHARE_PROMPT,
-    CALL_PHONE_TASK_CREATED_TEXT,
-    CALL_PHONE_TASK_FAILED_TEXT,
+    CALL_PHONE_MANAGER_UNAVAILABLE_TEXT,
     CLIENT_WARNING_PROMPT,
+    call_phone_result_text,
 )
 from app.utils.assets import AGENT_IMAGE, PARTNER_IMAGE, local_photo
 from app.utils.text import agent_welcome_text, bonus_line, h, money, referral_rules_text
@@ -141,7 +141,13 @@ async def new_client_payout_phone(message: Message, state: FSMContext, session: 
 
 
 @router.callback_query(AgentClientStates.waiting_client_warning, F.data.in_({WARN_CLIENT_YES, WARN_CLIENT_NO}))
-async def new_client_warning_response(callback: CallbackQuery, state: FSMContext) -> None:
+async def new_client_warning_response(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    data = await state.get_data()
+    lead = await get_lead(session, data.get("lead_id")) if data.get("lead_id") else None
+    answer = "Нет" if callback.data == WARN_CLIENT_NO else "Да"
+    if lead:
+        await add_agent_followup_answer_note(session, lead, "Получится предупредить знакомого", answer)
+
     if callback.data == WARN_CLIENT_NO:
         await state.clear()
         await callback.message.answer(AGENT_CLIENT_DONE_TEXT, reply_markup=agent_menu())
@@ -160,16 +166,21 @@ async def new_client_warning_response(callback: CallbackQuery, state: FSMContext
 async def new_client_call_phone_share_response(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     data = await state.get_data()
     if callback.data == SHARE_CALL_PHONE_NO:
+        lead = await get_lead(session, data.get("lead_id")) if data.get("lead_id") else None
+        if lead:
+            await add_agent_followup_answer_note(session, lead, "Получится передать номер звонящего менеджера", "Нет")
         await state.clear()
         await callback.message.answer(AGENT_CLIENT_DONE_TEXT, reply_markup=agent_menu())
         await callback.answer()
         return
 
     lead = await get_lead(session, data.get("lead_id")) if data.get("lead_id") else None
-    created = await ensure_callback_phone_task(session, lead) if lead else False
+    if lead:
+        await add_agent_followup_answer_note(session, lead, "Получится передать номер звонящего менеджера", "Да")
+    manager = await ensure_sales_manager_assignment(session, lead) if lead else None
     await state.clear()
     await callback.message.answer(
-        CALL_PHONE_TASK_CREATED_TEXT if created else CALL_PHONE_TASK_FAILED_TEXT,
+        call_phone_result_text(manager.phone) if manager else CALL_PHONE_MANAGER_UNAVAILABLE_TEXT,
         reply_markup=agent_menu(),
     )
     await callback.answer()

@@ -71,6 +71,7 @@ async def create_agent_client_lead(
     await session.commit()
     await session.refresh(lead, ["agent"])
     enqueue_lead_sync(lead.id)
+    enqueue_amocrm_sync(lead.id)
     return lead
 
 

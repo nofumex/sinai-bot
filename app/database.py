@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.config import get_settings
 from app.models import Base
+from app.services.sales_managers import seed_default_sales_managers
 
 settings = get_settings()
 
@@ -16,6 +17,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_sqlite(conn)
+        await seed_default_sales_managers(conn)
 
 
 async def _migrate_sqlite(conn) -> None:
@@ -41,6 +43,8 @@ async def _migrate_sqlite(conn) -> None:
     if "staff_notified_at" not in lead_columns:
         await conn.execute(text("ALTER TABLE leads ADD COLUMN staff_notified_at DATETIME"))
         await conn.execute(text("UPDATE leads SET staff_notified_at = CURRENT_TIMESTAMP WHERE type = 'agent_client'"))
+    if "sales_manager_id" not in lead_columns:
+        await conn.execute(text("ALTER TABLE leads ADD COLUMN sales_manager_id INTEGER"))
     if "amo_lead_id" not in lead_columns:
         await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_lead_id BIGINT"))
     if "amo_contact_id" not in lead_columns:
@@ -55,14 +59,6 @@ async def _migrate_sqlite(conn) -> None:
         await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_sync_error TEXT"))
     if "amo_synced_at" not in lead_columns:
         await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_synced_at DATETIME"))
-    if "amo_callback_task_id" not in lead_columns:
-        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_id BIGINT"))
-    if "amo_callback_task_created_at" not in lead_columns:
-        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_created_at DATETIME"))
-    if "amo_callback_task_result" not in lead_columns:
-        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_result TEXT"))
-    if "amo_callback_task_notified_at" not in lead_columns:
-        await conn.execute(text("ALTER TABLE leads ADD COLUMN amo_callback_task_notified_at DATETIME"))
 
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_platform ON users(platform)"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_platform_user_id ON users(platform_user_id)"))
@@ -71,7 +67,7 @@ async def _migrate_sqlite(conn) -> None:
     await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_leads_amo_lead_id ON leads(amo_lead_id)"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_amo_pipeline_id ON leads(amo_pipeline_id)"))
     await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_amo_status_id ON leads(amo_status_id)"))
-    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_amo_callback_task_id ON leads(amo_callback_task_id)"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_leads_sales_manager_id ON leads(sales_manager_id)"))
 
     await conn.execute(
         text(
